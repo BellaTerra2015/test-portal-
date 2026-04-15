@@ -1272,36 +1272,375 @@ function lockNursery(){
   nToast('🔒 Edit mode locked');
 }
 
+<script>
 // ═══════════════════════════════════════════════
-// PORTAL NAV
+// PORTAL NAV + EMPLOYEE MEMORY
 // ═══════════════════════════════════════════════
 var currentEmployee = '';
 var initialed = {};
 var REQUIRED_INITIALS = [2,3,5,6,7];
 
-function doLogin(){
-  var name=document.getElementById('login-name').value.trim();
-  var pass=document.getElementById('login-pass').value;
-  var err=document.getElementById('login-error');
-  if(!name){err.style.display='block';err.textContent='Please enter your name.';return;}
-  if(pass!==PORTAL_PW){err.style.display='block';err.textContent='Incorrect password. Please try again.';return;}
-  err.style.display='none';
+var EMPLOYEE_LOGIN_KEY = 'bt_current_employee';
+
+function normalizeEmployeeName(name){
+  return (name || '').trim().toLowerCase();
+}
+function employeeStateKey(name){
+  return 'bt_employee_state_' + normalizeEmployeeName(name);
+}
+function blankEmployeeState(name){
+  return {
+    employee: name || '',
+    signed410: false,
+    signedBreaks: false,
+    handbookSubmitted: false,
+    initials: {},
+    signedForms: {
+      "410": null,
+      "breaks": null
+    }
+  };
+}
+function getEmployeeState(name){
+  if(!name) return blankEmployeeState('');
+  var saved = ld(employeeStateKey(name));
+  var state = saved && typeof saved === 'object' ? saved : blankEmployeeState(name);
+
+  if(!state.employee) state.employee = name;
+  if(!state.initials || typeof state.initials !== 'object') state.initials = {};
+  if(typeof state.signed410 !== 'boolean') state.signed410 = false;
+  if(typeof state.signedBreaks !== 'boolean') state.signedBreaks = false;
+  if(typeof state.handbookSubmitted !== 'boolean') state.handbookSubmitted = false;
+  if(!state.signedForms || typeof state.signedForms !== 'object'){
+    state.signedForms = { "410": null, "breaks": null };
+  }
+  return state;
+}
+function saveEmployeeState(){
+  if(!currentEmployee) return;
+  var state = getEmployeeState(currentEmployee);
+  state.employee = currentEmployee;
+  state.initials = JSON.parse(JSON.stringify(initialed || {}));
+  sv(employeeStateKey(currentEmployee), state);
+}
+function setEmployeeState(patch){
+  if(!currentEmployee) return;
+  var state = getEmployeeState(currentEmployee);
+  Object.keys(patch || {}).forEach(function(k){
+    state[k] = patch[k];
+  });
+  state.initials = JSON.parse(JSON.stringify(initialed || {}));
+  sv(employeeStateKey(currentEmployee), state);
+}
+function restoreEmployeeState(name){
+  var state = getEmployeeState(name);
+  initialed = state.initials || {};
+
+  restoreFormStatuses(state);
+  restoreInitialsUI();
+  updateHandbookProgress();
+
+  if(state.handbookSubmitted){
+    var hbSuccess = document.getElementById('hb-success');
+    if(hbSuccess) hbSuccess.classList.add('show');
+  }
+}
+function restoreFormStatuses(state){
+  var signed410 = !!state.signed410;
+  var signedBreaks = !!state.signedBreaks;
+
+  var s410 = document.getElementById('status-410');
+  var sbreaks = document.getElementById('status-breaks');
+
+  if(s410) s410.textContent = signed410 ? '✅ Signed' : '⚠ Signature required';
+  if(sbreaks) sbreaks.textContent = signedBreaks ? '✅ Signed' : '⚠ Signature required';
+
+  var success410 = document.getElementById('success-410');
+  var successBreaks = document.getElementById('success-breaks');
+
+  if(success410) success410.classList.toggle('show', signed410);
+  if(successBreaks) successBreaks.classList.toggle('show', signedBreaks);
+
+  var sigBadge = document.getElementById('sig-badge');
+  if(sigBadge){
+    var remaining = 0;
+    if(!signed410) remaining++;
+    if(!signedBreaks) remaining++;
+
+    if(remaining > 0){
+      sigBadge.style.display = 'inline-block';
+      sigBadge.textContent = String(remaining);
+    } else {
+      sigBadge.style.display = 'none';
+    }
+  }
+}
+function restoreInitialsUI(){
+  REQUIRED_INITIALS.forEach(function(num){
+    var hasIt = !!initialed[num];
+    var done = document.getElementById('done-' + num);
+    var numEl = document.getElementById('num-' + num);
+    var typeEl = document.getElementById('type-' + num);
+    var inputEl = document.getElementById('init-' + num);
+
+    if(inputEl && hasIt && initialed[num].initials){
+      inputEl.value = initialed[num].initials;
+    }
+
+    if(done) done.classList.toggle('show', hasIt);
+
+    if(numEl){
+      numEl.classList.toggle('initialed', hasIt);
+      numEl.textContent = hasIt ? '✓' : String(num);
+    }
+
+    if(typeEl){
+      if(hasIt){
+        typeEl.textContent = '✅ Initialed';
+        typeEl.className = 'chapter-type done';
+      } else {
+        typeEl.textContent = '✍ Initial required after reading';
+        typeEl.className = 'chapter-type initial';
+      }
+    }
+  });
+}
+function loadPortal(name){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('portal').style.display='block';
   document.getElementById('welcome-name').textContent=name;
   document.getElementById('employee-badge').textContent='👤 '+name;
   currentEmployee=name;
-  ['410-name','breaks-name','hb-name'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=name;});
+
+  ['410-name','breaks-name','hb-name'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el) el.value=name;
+  });
+
   var td=new Date().toISOString().split('T')[0];
-  ['410-date','breaks-date','hb-date'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=td;});
+  ['410-date','breaks-date','hb-date'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el && !el.value) el.value=td;
+  });
+
   buildReorderItems();
   initCanvases();
-  updateHandbookProgress();
   loadSchollsValley();
   checkClackamasReminder();
   kelsoCheckPendingText();
+
+  restoreEmployeeState(name);
 }
-function doLogout(){location.reload();}
+function doLogin(){
+  var name=document.getElementById('login-name').value.trim();
+  var pass=document.getElementById('login-pass').value;
+  var err=document.getElementById('login-error');
+
+  if(!name){
+    err.style.display='block';
+    err.textContent='Please enter your name.';
+    return;
+  }
+
+  if(pass!==PORTAL_PW){
+    err.style.display='block';
+    err.textContent='Incorrect password. Please try again.';
+    return;
+  }
+
+  err.style.display='none';
+
+  localStorage.setItem(EMPLOYEE_LOGIN_KEY, name);
+
+  if(!ld(employeeStateKey(name))){
+    sv(employeeStateKey(name), blankEmployeeState(name));
+  }
+
+  loadPortal(name);
+}
+function doLogout(){
+  localStorage.removeItem(EMPLOYEE_LOGIN_KEY);
+  location.reload();
+}
+
+// auto-restore employee login on page load
+document.addEventListener('DOMContentLoaded', function(){
+  var savedEmployee = localStorage.getItem(EMPLOYEE_LOGIN_KEY);
+  if(savedEmployee){
+    loadPortal(savedEmployee);
+  }
+});
+
+// ═══════════════════════════════════════════════
+// HANDBOOK / SIGNATURES
+// ═══════════════════════════════════════════════
+function toggleChapter(h){
+  var b=h.nextElementSibling;
+  b.classList.toggle('open',!b.classList.contains('open'));
+  h.classList.toggle('open',!h.classList.contains('open'));
+}
+
+function saveInitial(num){
+  var val=document.getElementById('init-'+num).value.trim();
+  if(!val){
+    alert('Please enter your initials.');
+    return;
+  }
+
+  initialed[num]={
+    initials:val,
+    timestamp:new Date().toISOString(),
+    employee:currentEmployee
+  };
+
+  saveEmployeeState();
+  restoreInitialsUI();
+  updateHandbookProgress();
+}
+
+function updateHandbookProgress(){
+  var done=REQUIRED_INITIALS.filter(function(n){ return !!initialed[n]; }).length;
+  var pct=Math.round(done/REQUIRED_INITIALS.length*100);
+
+  var fill = document.getElementById('progress-fill');
+  var num = document.getElementById('progress-num');
+  if(fill) fill.style.width=pct+'%';
+  if(num) num.textContent=done;
+
+  var allDone = done===REQUIRED_INITIALS.length;
+
+  var complete = document.getElementById('handbook-complete');
+  var submitWrap = document.getElementById('handbook-submit-wrap');
+  var handbookBadge = document.getElementById('handbook-badge');
+  var statusHandbook = document.getElementById('status-handbook');
+
+  if(complete) complete.classList.toggle('show', allDone);
+  if(submitWrap) submitWrap.style.display = allDone ? 'block' : 'none';
+
+  if(statusHandbook){
+    statusHandbook.textContent = allDone ? '✅ All initials complete' : '⚠ Initials required';
+  }
+
+  if(handbookBadge){
+    handbookBadge.style.display = allDone ? 'none' : 'inline-block';
+    handbookBadge.textContent = allDone ? '' : '!';
+  }
+
+  // only hide the main resources badge if everything is done
+  var state = currentEmployee ? getEmployeeState(currentEmployee) : blankEmployeeState('');
+  var allEmployeeTasksDone = allDone && state.signed410 && state.signedBreaks;
+
+  var resBadge = document.getElementById('res-badge');
+  if(resBadge){
+    resBadge.style.display = allEmployeeTasksDone ? 'none' : 'inline-block';
+  }
+}
+
+function submitHandbook(){
+  var name=document.getElementById('hb-name').value.trim();
+  var date=document.getElementById('hb-date').value;
+
+  if(!name||!date){
+    alert('Please enter your name and date.');
+    return;
+  }
+
+  sendFormspree({
+    _subject:'Bella Terra Handbook Acknowledgment — '+name,
+    employee:name,
+    date:date,
+    type:'Employee Handbook Acknowledgment',
+    sections_initialed:REQUIRED_INITIALS.map(function(n){
+      var i=initialed[n]||{};
+      return 'Ch '+n+': '+(i.initials||'—')+' at '+(i.timestamp||'');
+    }).join(' | ')
+  }, 'hb-success', function(){
+    setEmployeeState({ handbookSubmitted:true });
+    updateHandbookProgress();
+  });
+}
+
+function submitForm(type){
+  var name=document.getElementById(type+'-name').value.trim();
+  var date=document.getElementById(type+'-date').value;
+  var consent=document.getElementById('consent-'+type).checked;
+  var canvas=document.getElementById('canvas-'+type);
+
+  if(!name||!date){
+    alert('Please fill in all required fields.');
+    return;
+  }
+  if(!consent){
+    alert('Please check the consent box.');
+    return;
+  }
+  if(!hasSignature(canvas)){
+    alert('Please draw your signature before submitting.');
+    return;
+  }
+
+  var payload = {
+    _subject:'Bella Terra '+(type==='410'?'4/10 Agreement':'Break & Meal Acknowledgment')+' — '+name,
+    employee_name:name,
+    position:document.getElementById(type+'-position').value||'',
+    date_of_hire:document.getElementById(type+'-hire').value||'',
+    signature_date:date,
+    form_type:type==='410'?'4/10 Work Schedule Agreement':'Break & Meal Period Acknowledgment',
+    signature_image:canvas.toDataURL('image/png'),
+    consent_confirmed:'Yes',
+    _replyto:'payroll@1BellaTerra.com'
+  };
+
+  sendFormspree(payload, 'success-'+type, function(){
+    var patch = {};
+
+    if(type==='410'){
+      patch.signed410 = true;
+      document.getElementById('status-410').textContent='✅ Signed';
+    }
+    if(type==='breaks'){
+      patch.signedBreaks = true;
+      document.getElementById('status-breaks').textContent='✅ Signed';
+    }
+
+    var state = getEmployeeState(currentEmployee);
+    state.signedForms[type] = {
+      signedAt: new Date().toISOString(),
+      signedDate: date,
+      employee: name
+    };
+    state.initials = JSON.parse(JSON.stringify(initialed || {}));
+
+    if(type==='410') state.signed410 = true;
+    if(type==='breaks') state.signedBreaks = true;
+
+    sv(employeeStateKey(currentEmployee), state);
+
+    restoreFormStatuses(state);
+    updateHandbookProgress();
+  });
+}
+
+function sendFormspree(data, successId, onSuccess){
+  fetch(FORMSPREE,{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Accept':'application/json'
+    },
+    body:JSON.stringify(data)
+  })
+  .then(function(res){
+    if(!res.ok) throw new Error('Form submission failed');
+    var successEl = document.getElementById(successId);
+    if(successEl) successEl.classList.add('show');
+    if(typeof onSuccess === 'function') onSuccess();
+  })
+  .catch(function(){
+    alert('Error sending. Check your connection.');
+  });
+}
+</script>
 
 function showNursery(){
   document.getElementById('main-tiles').style.display='none';
