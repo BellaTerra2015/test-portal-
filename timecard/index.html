@@ -1,1 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bella Terra Timecard — Login</title>
+  <!-- Load our shared stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
 
+  <!-- ── LOGIN SCREEN ─────────────────────────────────── -->
+  <!-- This full-screen green gradient matches the main portal login -->
+  <div class="tc-login-screen">
+    <h1>🕐 Bella Terra</h1>
+    <p>Employee Timecard · Woodland, WA</p>
+
+    <!-- White login card -->
+    <div class="tc-card" style="width:100%;max-width:380px;">
+
+      <!-- Employee name field -->
+      <div class="tc-field">
+        <label for="tc-login-name">Your Name</label>
+        <input
+          type="text"
+          id="tc-login-name"
+          placeholder="First Last"
+          autocomplete="name"
+        >
+      </div>
+
+      <!-- Password field -->
+      <div class="tc-field">
+        <label for="tc-login-pass">Password</label>
+        <input
+          type="password"
+          id="tc-login-pass"
+          placeholder="Enter your password"
+          autocomplete="current-password"
+        >
+      </div>
+
+      <!-- Error message — hidden until a bad login is tried -->
+      <p class="tc-error" id="tc-login-error"></p>
+
+      <!-- Login button -->
+      <button
+        class="tc-btn tc-btn-green"
+        onclick="tcDoLogin()"
+        style="margin-top:0.75rem;"
+      >
+        Sign In →
+      </button>
+
+      <!-- Small note at the bottom -->
+      <p style="font-size:0.78rem;color:var(--gray-mid);text-align:center;margin-top:0.75rem;">
+        Need help? Contact the office at office@1bellaterra.com
+      </p>
+    </div>
+  </div>
+
+  <!-- Load our JavaScript last (after the HTML is ready) -->
+  <script src="app.js"></script>
+
+  <!-- Allow pressing Enter to submit -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      document.getElementById('tc-login-pass').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') tcDoLogin();
+      });
+    });
+  </script>
+
+</body>
+</html>
