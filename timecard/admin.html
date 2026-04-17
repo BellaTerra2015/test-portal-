@@ -1,1 +1,275 @@
+/* ============================================================
+   Bella Terra Timecard — Admin Page Logic
+   File: /timecard/admin.js
+   This file is only loaded on admin.html.
+   It reads all employees' entries and builds the review table.
+   ============================================================ */
 
+
+/* ──────────────────────────────────────────────────────────────
+   ADMIN PAGE INIT
+   Called when admin.html finishes loading.
+   ────────────────────────────────────────────────────────────── */
+function tcInitAdmin() {
+  /* Redirect non-admins away */
+  var session = tcGetSession();
+  if (!session) { window.location.href = 'index.html'; return; }
+  if (session.role !== 'admin') { window.location.href = 'dashboard.html'; return; }
+
+  /* Show the logged-in admin's name in the header */
+  var badgeEl = document.getElementById('tc-admin-badge');
+  if (badgeEl) badgeEl.textContent = session.name;
+
+  /* Fill the week-picker with the last 4 weeks */
+  tcPopulateWeekPicker();
+
+  /* Build the initial summary table */
+  tcRenderAdminSummary();
+
+  /* Build the full detail table */
+  tcRenderAdminDetail();
+}
+
+
+/* ──────────────────────────────────────────────────────────────
+   WEEK PICKER
+   Lets admin choose which week to review.
+   ────────────────────────────────────────────────────────────── */
+function tcPopulateWeekPicker() {
+  var sel = document.getElementById('tc-week-picker');
+  if (!sel) return;
+
+  /* Generate the past 4 weeks as options */
+  for (var i = 0; i < 4; i++) {
+    var d = new Date();
+    d.setDate(d.getDate() - (i * 7));
+    var ws = tcWeekStart(d);
+    var we = new Date(ws); we.setDate(we.getDate() + 6);
+
+    var label = tcFormatDayLabel(ws) + ' – ' + tcFormatDayLabel(we);
+    var opt = document.createElement('option');
+    opt.value = ws.toISOString();
+    opt.textContent = i === 0 ? 'This week (' + label + ')' : label;
+    sel.appendChild(opt);
+  }
+
+  /* Re-render when a different week is chosen */
+  sel.addEventListener('change', function () {
+    tcRenderAdminSummary();
+    tcRenderAdminDetail();
+  });
+}
+
+/* Get the currently selected week start date from the picker. */
+function tcAdminSelectedWeek() {
+  var sel = document.getElementById('tc-week-picker');
+  if (!sel || !sel.value) return tcWeekStart(new Date());
+  return new Date(sel.value);
+}
+
+
+/* ──────────────────────────────────────────────────────────────
+   SUMMARY TABLE
+   Shows one row per employee with their total hours for the week.
+   ────────────────────────────────────────────────────────────── */
+function tcRenderAdminSummary() {
+  var tableBody = document.getElementById('tc-summary-tbody');
+  if (!tableBody) return;
+
+  var ws = tcAdminSelectedWeek();
+  var rows = [];
+
+  /* Loop through every employee and calculate their week total */
+  VALID_EMPLOYEES.forEach(function (emp) {
+    var weekEntries = tcGetWeekEntries(emp.name, ws);
+    var totalMs = weekEntries.reduce(function (sum, e) {
+      return sum + (e.totalWorkedMs || 0);
+    }, 0);
+    var totalHrs = tcMsToHrs(totalMs);
+    var entriesCount = weekEntries.filter(function (e) { return e.clockOut; }).length;
+    var hasOpen = weekEntries.some(function (e) { return !e.clockOut; });
+    var allApproved = weekEntries.length > 0 && weekEntries.every(function (e) { return e.approved; });
+
+    /* Flag if over 40 hours */
+    var overtimeFlag = totalHrs > 40;
+
+    rows.push({
+      name:         emp.name,
+      role:         emp.role,
+      totalHrs:     totalHrs,
+      entriesCount: entriesCount,
+      hasOpen:      hasOpen,
+      allApproved:  allApproved,
+      overtime:     overtimeFlag
+    });
+  });
+
+  /* Build the HTML rows */
+  tableBody.innerHTML = rows.map(function (r) {
+    var statusBadge = r.hasOpen
+      ? '<span style="font-size:11px;background:#fff8e6;color:#8b6914;padding:2px 8px;border-radius:10px;font-weight:600;">Open entry</span>'
+      : (r.allApproved && r.entriesCount > 0
+        ? '<span style="font-size:11px;background:#d4edda;color:#155724;padding:2px 8px;border-radius:10px;font-weight:600;">✓ Approved</span>'
+        : '<span style="font-size:11px;background:#f5f5f2;color:#888;padding:2px 8px;border-radius:10px;">Pending</span>');
+
+    var hrsDisplay = r.entriesCount === 0
+      ? '<span style="color:var(--gray-mid)">—</span>'
+      : (r.overtime
+        ? '<span style="color:var(--red);font-weight:700;">' + r.totalHrs.toFixed(1) + ' ⚠</span>'
+        : '<span style="font-weight:700;">' + r.totalHrs.toFixed(1) + '</span>');
+
+    return '<tr>'
+      + '<td>' + r.name + (r.role === 'admin' ? ' <span style="font-size:10px;color:var(--gray-mid)">(admin)</span>' : '') + '</td>'
+      + '<td style="text-align:center;">' + hrsDisplay + '</td>'
+      + '<td style="text-align:center;">' + (r.entriesCount || '—') + '</td>'
+      + '<td>' + statusBadge + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+
+/* ──────────────────────────────────────────────────────────────
+   DETAIL TABLE
+   Shows every individual punch entry for the selected week,
+   for all employees. Admin can approve or flag each one.
+   ────────────────────────────────────────────────────────────── */
+function tcRenderAdminDetail() {
+  var tableBody = document.getElementById('tc-detail-tbody');
+  if (!tableBody) return;
+
+  var ws = tcAdminSelectedWeek();
+  var allEntries = tcGetEntries().filter(function (e) {
+    var d = new Date(e.clockIn);
+    var we = new Date(ws); we.setDate(we.getDate() + 7);
+    return d >= ws && d < we;
+  });
+
+  /* Sort by clock-in time, oldest first */
+  allEntries.sort(function (a, b) { return a.clockIn - b.clockIn; });
+
+  if (!allEntries.length) {
+    tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray-mid);padding:1.5rem;">No entries for this week yet.</td></tr>';
+    return;
+  }
+
+  tableBody.innerHTML = allEntries.map(function (e) {
+    var inTime  = tcFormatTime(e.clockIn);
+    var outTime = e.clockOut ? tcFormatTime(e.clockOut) : '<span style="color:var(--gold);font-weight:600;">Open</span>';
+    var hrs     = e.totalWorkedMs
+      ? tcMsToHrs(e.totalWorkedMs).toFixed(2)
+      : (e.clockOut ? '0.00' : '<span style="color:var(--gray-mid)">—</span>');
+    var breakHrs = e.totalBreakMs
+      ? tcMsToHrs(e.totalBreakMs).toFixed(2)
+      : '0.00';
+    var notes   = e.notes || '—';
+
+    /* Approve / Flag buttons */
+    var approveBtn = e.approved
+      ? '<button class="tc-approve-btn approved" disabled>✓ Approved</button>'
+      : '<button class="tc-approve-btn approve" onclick="tcApproveEntry(\'' + e.id + '\')">Approve</button>';
+
+    var flagBtn = '<button class="tc-approve-btn flag" onclick="tcFlagEntry(\'' + e.id + '\')">Flag</button>';
+
+    return '<tr id="tr-' + e.id + '">'
+      + '<td>' + e.employee + '</td>'
+      + '<td>' + e.date + '</td>'
+      + '<td>' + e.job + '</td>'
+      + '<td>' + inTime + '</td>'
+      + '<td>' + outTime + '</td>'
+      + '<td style="text-align:center;">' + hrs + '</td>'
+      + '<td style="text-align:center;">' + breakHrs + '</td>'
+      + '<td><div style="display:flex;gap:4px;flex-wrap:wrap;">' + approveBtn + ' ' + flagBtn + '</div></td>'
+      + '</tr>';
+  }).join('');
+}
+
+
+/* ──────────────────────────────────────────────────────────────
+   APPROVE / FLAG ACTIONS
+   ────────────────────────────────────────────────────────────── */
+
+/* Mark a single entry as approved. */
+function tcApproveEntry(entryId) {
+  var entries = tcGetEntries();
+  var found = entries.find(function (e) { return e.id === entryId; });
+  if (found) {
+    found.approved = true;
+    tcSaveEntries(entries);
+    tcRenderAdminDetail();
+    tcRenderAdminSummary();
+  }
+}
+
+/* Flag an entry for review — prompts for a note and marks it. */
+function tcFlagEntry(entryId) {
+  var note = prompt('Enter a note about why this entry is flagged (optional):') || '';
+  var entries = tcGetEntries();
+  var found = entries.find(function (e) { return e.id === entryId; });
+  if (found) {
+    found.flagged = true;
+    found.flagNote = note;
+    found.approved = false;
+    tcSaveEntries(entries);
+    tcRenderAdminDetail();
+    tcRenderAdminSummary();
+
+    /* Highlight the flagged row in red */
+    var row = document.getElementById('tr-' + entryId);
+    if (row) row.style.background = '#fdeaea';
+  }
+}
+
+
+/* ──────────────────────────────────────────────────────────────
+   EXPORT TO CSV
+   Lets admin download the week's entries as a spreadsheet.
+   ────────────────────────────────────────────────────────────── */
+function tcExportCSV() {
+  var ws = tcAdminSelectedWeek();
+  var we = new Date(ws); we.setDate(we.getDate() + 7);
+
+  var allEntries = tcGetEntries().filter(function (e) {
+    var d = new Date(e.clockIn);
+    return d >= ws && d < we && e.clockOut;   /* only completed entries */
+  });
+
+  if (!allEntries.length) {
+    alert('No completed entries to export for this week.');
+    return;
+  }
+
+  /* Build CSV header row */
+  var csvRows = [
+    ['Employee', 'Date', 'Job', 'Clock In', 'Clock Out', 'Hours Worked', 'Break Hours', 'Notes', 'Approved', 'Flagged']
+  ];
+
+  /* Add one CSV row per entry */
+  allEntries.forEach(function (e) {
+    csvRows.push([
+      e.employee,
+      e.date,
+      e.job,
+      tcFormatTime(e.clockIn),
+      tcFormatTime(e.clockOut),
+      tcMsToHrs(e.totalWorkedMs || 0).toFixed(2),
+      tcMsToHrs(e.totalBreakMs || 0).toFixed(2),
+      (e.notes || '').replace(/,/g, ' '),   /* remove commas from notes so CSV doesn't break */
+      e.approved ? 'Yes' : 'No',
+      e.flagged  ? 'Yes' : 'No'
+    ]);
+  });
+
+  /* Convert array to CSV text */
+  var csvContent = csvRows.map(function (row) {
+    return row.map(function (cell) { return '"' + cell + '"'; }).join(',');
+  }).join('\n');
+
+  /* Trigger a file download in the browser */
+  var blob = new Blob([csvContent], { type: 'text/csv' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'bella-terra-timecard-' + ws.toISOString().split('T')[0] + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
